@@ -14,10 +14,10 @@ sudo usermod -aG sudo frappe
 su - frappe
 
 # Clone the installer repository
-git clone https://github.com/kamikazce/Frappe-V15---ERP-Next-Quick-Install.git
+git clone https://github.com/kamikazce/Frappe-V15-ERP-Next-Quick-Install.git
 
 # Navigate to the installer directory
-cd Frappe-V15---ERP-Next-Quick-Install
+cd Frappe-V15-ERP-Next-Quick-Install
 
 # Make the installer script executable
 chmod +x install_frappe.sh
