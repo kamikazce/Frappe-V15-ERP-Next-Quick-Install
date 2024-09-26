@@ -20,10 +20,6 @@ RED='\033[0;31m'
 LIGHT_BLUE='\033[1;34m'
 NC='\033[0m' # No Color
 
-# Supported OS and versions
-SUPPORTED_OS="Ubuntu"
-SUPPORTED_VERSIONS=("22.04" "24.04")
-
 # Function to check OS compatibility
 check_os() {
     local os_name
@@ -31,7 +27,7 @@ check_os() {
     os_name=$(lsb_release -is)
     os_version=$(lsb_release -rs)
 
-    if [[ "$os_name" != "$SUPPORTED_OS" ]]; then
+    if [[ "$os_name" != "Ubuntu" ]]; then
         echo -e "${RED}Unsupported Operating System: $os_name. Only Ubuntu is supported.${NC}"
         exit 1
     fi
@@ -41,6 +37,8 @@ check_os() {
         exit 1
     fi
 }
+
+SUPPORTED_VERSIONS=("22.04" "24.04")
 
 check_os
 
@@ -78,85 +76,83 @@ ask_twice() {
 echo -e "${LIGHT_BLUE}Welcome to the Frappe/ERPNext Installer...${NC}"
 sleep 2
 
-# Navigate to the home directory
-cd "$HOME"
-
-# Prompt for SQL root password
+# Prompt for MariaDB root password
 echo -e "${YELLOW}Setting up MariaDB root password...${NC}"
 sqlpasswrd=$(ask_twice "Enter your MariaDB root password" "true")
 
-# Update system packages
-echo -e "${YELLOW}Updating system packages...${NC}"
-sudo apt update && sudo apt upgrade -y
-echo -e "${GREEN}System packages updated.${NC}"
-sleep 2
+# Function to check if a package is installed
+is_installed() {
+    dpkg -s "$1" &>/dev/null
+}
 
-# Install essential packages
-echo -e "${YELLOW}Installing essential packages: git, curl, software-properties-common, wget, gnupg...${NC}"
-sudo apt install -y software-properties-common git curl wget gnupg
-echo -e "${GREEN}Essential packages installed.${NC}"
-sleep 2
+# Function to uninstall MariaDB if installed and not version 10.6
+uninstall_mariadb() {
+    if is_installed mariadb-server || is_installed mariadb-client; then
+        installed_version=$(mariadb --version | awk '{print $5}' | cut -d',' -f1)
+        if [[ "$installed_version" != "10.6."* ]]; then
+            echo -e "${YELLOW}Removing existing MariaDB installation (Version: $installed_version)...${NC}"
+            sudo systemctl stop mariadb || true
+            sudo apt-get remove --purge -y mariadb-server mariadb-client mariadb-common
+            sudo apt-get autoremove -y
+            sudo apt-get autoclean
+            sudo rm -rf /etc/mysql /var/lib/mysql
+            echo -e "${GREEN}Existing MariaDB installation removed.${NC}"
+        else
+            echo -e "${GREEN}MariaDB 10.6 is already installed.${NC}"
+        fi
+    else
+        echo -e "${GREEN}No existing MariaDB installation found.${NC}"
+    fi
+}
 
-# Install Python 3.10 if not already installed
-PYTHON_VERSION_REQUIRED="3.10"
-current_python_version=$(python3 --version | awk '{print $2}')
-
-if [[ "$(printf '%s\n' "$PYTHON_VERSION_REQUIRED" "$current_python_version" | sort -V | head -n1)" != "$PYTHON_VERSION_REQUIRED" ]]; then
-    echo -e "${YELLOW}Installing Python ${PYTHON_VERSION_REQUIRED}...${NC}"
-    sudo apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
-        libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev
-
-    wget https://www.python.org/ftp/python/3.10.11/Python-3.10.11.tgz
-    tar -xf Python-3.10.11.tgz
-    cd Python-3.10.11
-    ./configure --enable-optimizations
-    make -j "$(nproc)"
-    sudo make altinstall
-    cd ..
-    rm -rf Python-3.10.11 Python-3.10.11.tgz
-
-    # Update alternatives
-    sudo update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 1
-
-    echo -e "${GREEN}Python ${PYTHON_VERSION_REQUIRED} installed successfully.${NC}"
+# Function to install MariaDB 10.6
+install_mariadb() {
+    echo -e "${YELLOW}Installing MariaDB 10.6...${NC}"
+    
+    # Determine Ubuntu codename
+    ubuntu_codename=$(lsb_release -cs)
+    
+    # Install software-properties-common and dirmngr
+    sudo apt install -y software-properties-common dirmngr
+    
+    # Import MariaDB GPG key
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc | sudo gpg --dearmor -o /etc/apt/keyrings/mariadb-keyring.gpg
+    
+    # Add MariaDB repository
+    echo "deb [arch=amd64,arm64,ppc64el signed-by=/etc/apt/keyrings/mariadb-keyring.gpg] https://mariadb.org/mariadb/repositories/10.6/ubuntu ${ubuntu_codename} main" | sudo tee /etc/apt/sources.list.d/mariadb.list
+    
+    # Update package lists
+    sudo apt update
+    
+    # Install MariaDB 10.6
+    sudo apt install -y mariadb-server mariadb-client
+    
+    # Verify MariaDB version
+    installed_mariadb_version=$(mariadb --version | awk '{print $5}' | cut -d',' -f1)
+    if [[ "$installed_mariadb_version" != "10.6."* ]]; then
+        echo -e "${RED}MariaDB 10.6 installation failed. Installed version: $installed_mariadb_version${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}MariaDB 10.6 installed successfully.${NC}"
     sleep 2
-fi
+}
 
-# Install additional Python packages and Redis
-echo -e "${YELLOW}Installing additional Python packages and Redis Server...${NC}"
-sudo apt install -y python3-dev python3-venv python3-pip redis-server
-echo -e "${GREEN}Python packages and Redis installed.${NC}"
-sleep 2
+# Function to configure MariaDB
+configure_mariadb() {
+    echo -e "${YELLOW}Updating MariaDB configuration...${NC}"
+    sleep 2
 
-# Install MariaDB 10.6
-echo -e "${YELLOW}Installing MariaDB 10.6...${NC}"
+    # Backup the original configuration file if not already backed up
+    if [ ! -f /etc/mysql/mariadb.conf.d/50-server.cnf.bak ]; then
+        sudo cp /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf.bak
+        echo -e "${GREEN}Original MariaDB configuration file backed up.${NC}"
+    else
+        echo -e "${GREEN}Backup of MariaDB configuration file already exists.${NC}"
+    fi
 
-# Add MariaDB repository
-sudo apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
-sudo add-apt-repository 'deb [arch=amd64,arm64,ppc64el] https://mariadb.org/mariadb/repositories/10.6/ubuntu focal main'
-
-# Update and install MariaDB
-sudo apt update
-sudo apt install -y mariadb-server=1:10.6.12-0ubuntu0.20.04.1 mariadb-client=1:10.6.12-0ubuntu0.20.04.1
-
-# Verify MariaDB version
-installed_mariadb_version=$(mariadb --version | awk '{print $5}' | cut -d',' -f1)
-if [[ "$installed_mariadb_version" != "10.6."* ]]; then
-    echo -e "${RED}MariaDB 10.6 installation failed. Installed version: $installed_mariadb_version${NC}"
-    exit 1
-fi
-echo -e "${GREEN}MariaDB 10.6 installed successfully.${NC}"
-sleep 2
-
-# MariaDB Configuration
-echo -e "${YELLOW}Updating MariaDB configuration...${NC}"
-sleep 2
-
-# Backup the original configuration file
-sudo cp /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf.bak
-
-# Delete all content and insert new content
-sudo tee /etc/mysql/mariadb.conf.d/50-server.cnf > /dev/null <<EOF
+    # Overwrite the configuration file
+    sudo tee /etc/mysql/mariadb.conf.d/50-server.cnf > /dev/null <<EOF
 # These groups are read by MariaDB server.
 # Use it for options that only the server (but not clients) should see
 # this is read by the standalone daemon and embedded servers
@@ -264,148 +260,240 @@ collation-server      = utf8mb4_general_ci
 [mariadb-10.6]
 EOF
 
-# Restart MariaDB to apply new configuration
-echo -e "${YELLOW}Restarting MariaDB to apply new configuration...${NC}"
-sudo systemctl restart mariadb
+    # Restart MariaDB to apply new configuration
+    echo -e "${YELLOW}Restarting MariaDB to apply new configuration...${NC}"
+    sudo systemctl restart mariadb
 
-# MariaDB Security Configuration
-echo -e "${YELLOW}Applying MariaDB security settings...${NC}"
-sleep 2
+    # MariaDB Security Configuration
+    echo -e "${YELLOW}Applying MariaDB security settings...${NC}"
+    sleep 2
 
-# Apply the security settings
-password_changed=false
-while [ "$password_changed" = false ]; do
-    sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';"
-    
-    # Check if the password update was successful
-    if sudo mysql -u root -p"$sqlpasswrd" -e "SELECT 1;" &> /dev/null; then
-        password_changed=true
-        echo -e "${GREEN}Password update successful!${NC}"
+    # Apply the security settings
+    password_changed=false
+    while [ "$password_changed" = false ]; do
+        sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd';"
+
+        # Check if the password update was successful
+        if sudo mysql -u root -p"$sqlpasswrd" -e "SELECT 1;" &> /dev/null; then
+            password_changed=true
+            echo -e "${GREEN}Password update successful!${NC}"
+        else
+            echo -e "${RED}Password update failed! Retrying...${NC}"
+            sleep 2 # wait for 2 seconds before retrying
+        fi
+    done
+
+    # Grant privileges to root user for localhost and 127.0.0.1
+    sudo mysql -u root -p"$sqlpasswrd" -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd' WITH GRANT OPTION;"
+    sudo mysql -u root -p"$sqlpasswrd" -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$sqlpasswrd' WITH GRANT OPTION;"
+    sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
+
+    sudo mysql -u root -p"$sqlpasswrd" -e "DELETE FROM mysql.user WHERE User='';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "DROP DATABASE IF EXISTS test; DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+    sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
+
+    echo -e "${GREEN}MariaDB configuration and security settings completed!${NC}"
+    echo -e "\n"
+    sleep 1
+}
+
+# Function to install Python 3.10 if necessary
+install_python() {
+    PYTHON_VERSION_REQUIRED="3.10"
+    current_python_version=$(python3 --version | awk '{print $2}')
+
+    if [[ "$(printf '%s\n' "$PYTHON_VERSION_REQUIRED" "$current_python_version" | sort -V | head -n1)" != "$PYTHON_VERSION_REQUIRED" ]]; then
+        echo -e "${YELLOW}Installing Python ${PYTHON_VERSION_REQUIRED}...${NC}"
+        sudo apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
+            libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev
+
+        wget https://www.python.org/ftp/python/3.10.11/Python-3.10.11.tgz
+        tar -xf Python-3.10.11.tgz
+        cd Python-3.10.11
+        ./configure --enable-optimizations --enable-shared
+        make -j "$(nproc)"
+        sudo make altinstall
+        cd ..
+        rm -rf Python-3.10.11 Python-3.10.11.tgz
+
+        # Update alternatives
+        sudo update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 1
+
+        echo -e "${GREEN}Python ${PYTHON_VERSION_REQUIRED} installed successfully.${NC}"
+        sleep 2
     else
-        echo -e "${RED}Password update failed! Retrying...${NC}"
-        sleep 2 # wait for 2 seconds before retrying
+        echo -e "${GREEN}Python ${PYTHON_VERSION_REQUIRED} is already installed.${NC}"
     fi
-done
+}
 
-# Grant privileges to root user for localhost and 127.0.0.1
-sudo mysql -u root -p"$sqlpasswrd" -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' IDENTIFIED BY '$sqlpasswrd' WITH GRANT OPTION;"
-sudo mysql -u root -p"$sqlpasswrd" -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$sqlpasswrd' WITH GRANT OPTION;"
-sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
+# Function to install NVM, Node.js, npm, and yarn
+install_node_npm_yarn() {
+    echo -e "${YELLOW}Installing NVM, Node.js, npm, and yarn...${NC}"
+    sleep 2
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
 
-sudo mysql -u root -p"$sqlpasswrd" -e "DELETE FROM mysql.user WHERE User='';"
-sudo mysql -u root -p"$sqlpasswrd" -e "DROP DATABASE IF EXISTS test; DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
-sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
+    # Load NVM into the current shell
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck source=/dev/null
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-echo -e "${GREEN}MariaDB configuration and security settings completed!${NC}"
-echo -e "\n"
-sleep 1
+    # Install Node.js version 18 for Frappe version 15
+    echo -e "${YELLOW}Installing Node.js version 18...${NC}"
+    nvm install 18
+    nvm use 18
+    nvm alias default 18
 
-# Install NVM, Node.js, npm, and yarn
-echo -e "${YELLOW}Installing NVM, Node.js, npm, and yarn...${NC}"
+    sudo apt-get install -y npm
+    sudo npm install -g yarn
+    echo -e "${GREEN}NVM, Node.js, npm, and yarn installed.${NC}"
+    sleep 2
+}
+
+# Function to install Bench CLI
+install_bench() {
+    echo -e "${YELLOW}Installing Bench CLI...${NC}"
+    sudo pip3 install frappe-bench
+    echo -e "${GREEN}Bench CLI installed.${NC}"
+    sleep 2
+}
+
+# Function to initialize Bench
+initialize_bench() {
+    echo -e "${YELLOW}Initializing Bench in frappe-bench directory...${NC}"
+    bench init frappe-bench --frappe-branch version-15 --verbose
+    echo -e "${GREEN}Bench initialized.${NC}"
+    sleep 2
+}
+
+# Function to create a new site
+create_site() {
+    echo -e "${YELLOW}Preparing to create a new site. This may take a few minutes...${NC}"
+    read -rp "Enter the site name (use FQDN if you plan to install SSL): " site_name
+    adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
+
+    # Create new site
+    echo -e "${YELLOW}Creating new site: ${site_name}...${NC}"
+    cd frappe-bench
+    bench new-site "$site_name" --db-root-password "$sqlpasswrd" --admin-password "$adminpasswrd"
+    echo -e "${GREEN}Site created successfully.${NC}"
+    sleep 2
+}
+
+# Function to install ERPNext optionally
+install_erpnext() {
+    echo -e "${LIGHT_BLUE}Would you like to install ERPNext? (yes/no)${NC}"
+    read -rp "Response: " erpnext_install
+    erpnext_install=$(echo "$erpnext_install" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$erpnext_install" == "yes" || "$erpnext_install" == "y" ]]; then
+        echo -e "${YELLOW}Installing ERPNext...${NC}"
+        bench get-app erpnext --branch version-15
+        bench --site "$site_name" install-app erpnext
+        echo -e "${GREEN}ERPNext installed successfully.${NC}"
+        sleep 2
+    else
+        echo -e "${RED}Skipping ERPNext installation.${NC}"
+        sleep 2
+    fi
+}
+
+# Function to setup production
+setup_production() {
+    echo -e "${YELLOW}Setting up production environment...${NC}"
+    bench setup production "$USER"
+    echo -e "${GREEN}Production environment set up successfully.${NC}"
+    sleep 2
+}
+
+# Function to install SSL optionally
+install_ssl() {
+    echo -e "${YELLOW}Would you like to install SSL? (yes/no)${NC}"
+    read -rp "Response: " install_ssl
+    install_ssl=$(echo "$install_ssl" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
+        echo -e "${YELLOW}Installing Certbot for SSL...${NC}"
+        sudo apt install -y snapd
+        sudo snap install core
+        sudo snap refresh core
+        sudo snap install --classic certbot
+        sudo ln -s /snap/bin/certbot /usr/bin/certbot
+
+        echo -e "${YELLOW}Obtaining and installing SSL certificate...${NC}"
+        read -rp "Enter your email address for SSL certificate: " email_address
+        sudo certbot --nginx --non-interactive --agree-tos --email "$email_address" -d "$site_name"
+        echo -e "${GREEN}SSL certificate installed successfully.${NC}"
+        sleep 2
+    else
+        echo -e "${RED}Skipping SSL installation.${NC}"
+        sleep 2
+    fi
+}
+
+# Function to apply final permissions
+apply_permissions() {
+    echo -e "${YELLOW}Applying final permissions...${NC}"
+    sudo chmod -R 755 "$HOME/frappe-bench"
+    echo -e "${GREEN}Permissions applied.${NC}"
+    sleep 2
+}
+
+# Function to display completion message
+completion_message() {
+    echo -e "${GREEN}--------------------------------------------------------------------------------"
+    if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
+        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
+        echo -e "You can access your ERPNext instance securely at https://$site_name"
+    else
+        server_ip=$(hostname -I | awk '{print $1}')
+        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
+        echo -e "You can access your ERPNext instance at http://$server_ip"
+    fi
+    echo -e "Visit https://docs.erpnext.com for documentation."
+    echo -e "Enjoy using ERPNext!"
+    echo -e "--------------------------------------------------------------------------------${NC}"
+}
+
+# Main Installation Flow
+
+echo -e "${LIGHT_BLUE}Starting Frappe V15 & ERPNext Installation...${NC}"
 sleep 2
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
 
-# Load NVM into the current shell
-export NVM_DIR="$HOME/.nvm"
-# shellcheck source=/dev/null
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+# Uninstall existing MariaDB if necessary
+uninstall_mariadb
 
-# Install Node.js version 18 for Frappe version 15
-echo -e "${YELLOW}Installing Node.js version 18...${NC}"
-nvm install 18
-nvm use 18
-nvm alias default 18
+# Install MariaDB 10.6
+install_mariadb
 
-sudo apt-get install -y npm
-sudo npm install -g yarn
-echo -e "${GREEN}NVM, Node.js, npm, and yarn installed.${NC}"
-sleep 2
+# Configure MariaDB
+configure_mariadb
+
+# Install Python 3.10 if necessary
+install_python
+
+# Install Node.js, npm, and yarn
+install_node_npm_yarn
 
 # Install Bench CLI
-echo -e "${YELLOW}Installing Bench CLI...${NC}"
-sudo pip3 install frappe-bench
-echo -e "${GREEN}Bench CLI installed.${NC}"
-sleep 2
+install_bench
 
 # Initialize Bench
-echo -e "${YELLOW}Initializing Bench in frappe-bench directory...${NC}"
-bench init frappe-bench --frappe-branch version-15 --verbose
-echo -e "${GREEN}Bench initialized.${NC}"
-sleep 2
+initialize_bench
 
-# Prompt for site name
-echo -e "${YELLOW}Preparing to create a new site. This may take a few minutes...${NC}"
-read -rp "Enter the site name (use FQDN if you plan to install SSL): " site_name
-adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
+# Create a new site
+create_site
 
-# Create new site
-echo -e "${YELLOW}Creating new site: ${site_name}...${NC}"
-cd frappe-bench
-bench new-site "$site_name" --db-root-password "$sqlpasswrd" --admin-password "$adminpasswrd"
-echo -e "${GREEN}Site created successfully.${NC}"
-sleep 2
+# Install ERPNext optionally
+install_erpnext
 
-# Prompt to install ERPNext
-echo -e "${LIGHT_BLUE}Would you like to install ERPNext? (yes/no)${NC}"
-read -rp "Response: " erpnext_install
-erpnext_install=$(echo "$erpnext_install" | tr '[:upper:]' '[:lower:]')
+# Setup production environment
+setup_production
 
-if [[ "$erpnext_install" == "yes" || "$erpnext_install" == "y" ]]; then
-    echo -e "${YELLOW}Installing ERPNext...${NC}"
-    bench get-app erpnext --branch version-15
-    bench --site "$site_name" install-app erpnext
-    echo -e "${GREEN}ERPNext installed successfully.${NC}"
-    sleep 2
-else
-    echo -e "${RED}Skipping ERPNext installation.${NC}"
-    sleep 2
-fi
+# Install SSL optionally
+install_ssl
 
-# Configure Supervisor and Nginx for Production
-echo -e "${YELLOW}Setting up production environment...${NC}"
-bench setup production "$USER"
-echo -e "${GREEN}Production environment set up successfully.${NC}"
-sleep 2
+# Apply final permissions
+apply_permissions
 
-# Prompt to install SSL
-echo -e "${YELLOW}Would you like to install SSL? (yes/no)${NC}"
-read -rp "Response: " install_ssl
-install_ssl=$(echo "$install_ssl" | tr '[:upper:]' '[:lower:]')
-
-if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
-    echo -e "${YELLOW}Installing Certbot for SSL...${NC}"
-    sudo apt install -y snapd
-    sudo snap install core
-    sudo snap refresh core
-    sudo snap install --classic certbot
-    sudo ln -s /snap/bin/certbot /usr/bin/certbot
-
-    echo -e "${YELLOW}Obtaining and installing SSL certificate...${NC}"
-    read -rp "Enter your email address for SSL certificate: " email_address
-    sudo certbot --nginx --non-interactive --agree-tos --email "$email_address" -d "$site_name"
-    echo -e "${GREEN}SSL certificate installed successfully.${NC}"
-    sleep 2
-else
-    echo -e "${RED}Skipping SSL installation.${NC}"
-    sleep 2
-fi
-
-# Final permissions and cleanup
-echo -e "${YELLOW}Applying final permissions...${NC}"
-sudo chmod -R 755 "$HOME/frappe-bench"
-echo -e "${GREEN}Permissions applied.${NC}"
-sleep 2
-
-# Completion message
-echo -e "${GREEN}--------------------------------------------------------------------------------"
-if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
-    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
-    echo -e "You can access your ERPNext instance securely at https://$site_name"
-else
-    server_ip=$(hostname -I | awk '{print $1}')
-    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
-    echo -e "You can access your ERPNext instance at http://$server_ip"
-fi
-echo -e "Visit https://docs.erpnext.com for documentation."
-echo -e "Enjoy using ERPNext!"
-echo -e "--------------------------------------------------------------------------------${NC}"
+# Display completion message
+completion_message
