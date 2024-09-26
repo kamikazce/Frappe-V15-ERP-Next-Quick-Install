@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
 
+# Frappe V15 & ERPNext Quick Install Script
+# This script installs Frappe Framework and ERPNext version 15 on Ubuntu 22.04 or 24.04 within WSL.
+# It ensures all dependencies are installed, configures MariaDB 10.6, creates a dedicated 'frappe' user,
+# and sets up the necessary environment for Frappe and ERPNext to run smoothly.
+
 # Exit immediately if a command exits with a non-zero status.
 set -e
-
-# Error handler to catch and report errors
-handle_error() {
-    local line="$1"
-    local exit_code="$2"
-    echo -e "\n${RED}An error occurred on line ${line} with exit status ${exit_code}.${NC}"
-    exit "$exit_code"
-}
-
-trap 'handle_error ${LINENO} $?' ERR
 
 # Define color codes for output
 YELLOW='\033[1;33m'
@@ -19,6 +14,17 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 LIGHT_BLUE='\033[1;34m'
 NC='\033[0m' # No Color
+
+# Function to handle errors
+handle_error() {
+    local line="$1"
+    local exit_code="$2"
+    echo -e "\n${RED}Error: An error occurred on line ${line} with exit code ${exit_code}.${NC}"
+    exit "$exit_code"
+}
+
+# Trap errors and call handle_error
+trap 'handle_error ${LINENO} $?' ERR
 
 # Function to check OS compatibility
 check_os() {
@@ -73,7 +79,7 @@ ask_twice() {
     done
 }
 
-echo -e "${LIGHT_BLUE}Welcome to the Frappe/ERPNext Installer...${NC}"
+echo -e "${LIGHT_BLUE}Welcome to the Frappe V15 & ERPNext Quick Install Script...${NC}"
 sleep 2
 
 # Prompt for MariaDB root password
