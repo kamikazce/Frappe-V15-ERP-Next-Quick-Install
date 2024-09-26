@@ -85,6 +85,7 @@ sleep 2
 # Prompt for MariaDB root password
 echo -e "${YELLOW}Setting up MariaDB root password...${NC}"
 sqlpasswrd=$(ask_twice "Enter your MariaDB root password" "true")
+echo
 
 # Function to check if a package is installed
 is_installed() {
@@ -294,6 +295,7 @@ EOF
     sudo mysql -u root -p"$sqlpasswrd" -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$sqlpasswrd' WITH GRANT OPTION;"
     sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
 
+    # Remove anonymous users and test database
     sudo mysql -u root -p"$sqlpasswrd" -e "DELETE FROM mysql.user WHERE User='';"
     sudo mysql -u root -p"$sqlpasswrd" -e "DROP DATABASE IF EXISTS test; DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
     sudo mysql -u root -p"$sqlpasswrd" -e "FLUSH PRIVILEGES;"
@@ -306,10 +308,12 @@ EOF
 # Function to install Python 3.10 if necessary
 install_python() {
     PYTHON_VERSION_REQUIRED="3.10"
-    current_python_version=$(python3 --version | awk '{print $2}')
+    current_python_version=$(python3 --version 2>/dev/null | awk '{print $2}')
 
-    if [[ "$(printf '%s\n' "$PYTHON_VERSION_REQUIRED" "$current_python_version" | sort -V | head -n1)" != "$PYTHON_VERSION_REQUIRED" ]]; then
+    if [[ -z "$current_python_version" || "$(printf '%s\n' "$PYTHON_VERSION_REQUIRED" "$current_python_version" | sort -V | head -n1)" != "$PYTHON_VERSION_REQUIRED" ]]; then
         echo -e "${YELLOW}Installing Python ${PYTHON_VERSION_REQUIRED}...${NC}"
+        sleep 2
+
         sudo apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
             libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev
 
@@ -376,6 +380,7 @@ create_site() {
     echo -e "${YELLOW}Preparing to create a new site. This may take a few minutes...${NC}"
     read -rp "Enter the site name (use FQDN if you plan to install SSL): " site_name
     adminpasswrd=$(ask_twice "Enter the Administrator password" "true")
+    echo
 
     # Create new site
     echo -e "${YELLOW}Creating new site: ${site_name}...${NC}"
@@ -390,6 +395,13 @@ install_erpnext() {
     echo -e "${LIGHT_BLUE}Would you like to install ERPNext? (yes/no)${NC}"
     read -rp "Response: " erpnext_install
     erpnext_install=$(echo "$erpnext_install" | tr '[:upper:]' '[:lower:]')
+
+    while [[ "$erpnext_install" != "yes" && "$erpnext_install" != "y" && "$erpnext_install" != "no" && "$erpnext_install" != "n" ]]; do
+        echo -e "${RED}Invalid response. Please answer with 'yes' or 'no'.${NC}"
+        echo -e "${LIGHT_BLUE}Would you like to install ERPNext? (yes/no)${NC}"
+        read -rp "Response: " erpnext_install
+        erpnext_install=$(echo "$erpnext_install" | tr '[:upper:]' '[:lower:]')
+    done
 
     if [[ "$erpnext_install" == "yes" || "$erpnext_install" == "y" ]]; then
         echo -e "${YELLOW}Installing ERPNext...${NC}"
@@ -417,6 +429,13 @@ install_ssl() {
     read -rp "Response: " install_ssl
     install_ssl=$(echo "$install_ssl" | tr '[:upper:]' '[:lower:]')
 
+    while [[ "$install_ssl" != "yes" && "$install_ssl" != "y" && "$install_ssl" != "no" && "$install_ssl" != "n" ]]; do
+        echo -e "${RED}Invalid response. Please answer with 'yes' or 'no'.${NC}"
+        echo -e "${YELLOW}Would you like to install SSL? (yes/no)${NC}"
+        read -rp "Response: " install_ssl
+        install_ssl=$(echo "$install_ssl" | tr '[:upper:]' '[:lower:]')
+    done
+
     if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
         echo -e "${YELLOW}Installing Certbot for SSL...${NC}"
         sudo apt install -y snapd
@@ -427,6 +446,12 @@ install_ssl() {
 
         echo -e "${YELLOW}Obtaining and installing SSL certificate...${NC}"
         read -rp "Enter your email address for SSL certificate: " email_address
+
+        # Ensure domain points to server before proceeding
+        echo -e "${YELLOW}Ensure your domain name is pointed to this server's IP address before proceeding.${NC}"
+        echo -e "${YELLOW}Press Enter to continue..."
+        read
+
         sudo certbot --nginx --non-interactive --agree-tos --email "$email_address" -d "$site_name"
         echo -e "${GREEN}SSL certificate installed successfully.${NC}"
         sleep 2
@@ -444,25 +469,88 @@ apply_permissions() {
     sleep 2
 }
 
-# Function to display completion message
-completion_message() {
-    echo -e "${GREEN}--------------------------------------------------------------------------------"
-    if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
-        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
-        echo -e "You can access your ERPNext instance securely at https://$site_name"
+# Function to create a dedicated frappe user
+create_frappe_user() {
+    if id "frappe" &>/dev/null; then
+        echo -e "${GREEN}User 'frappe' already exists.${NC}"
     else
-        server_ip=$(hostname -I | awk '{print $1}')
-        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
-        echo -e "You can access your ERPNext instance at http://$server_ip"
+        echo -e "${YELLOW}Creating 'frappe' user...${NC}"
+        sudo adduser --disabled-password --gecos "" frappe
+        echo -e "${GREEN}'frappe' user created successfully.${NC}"
     fi
-    echo -e "Visit https://docs.erpnext.com for documentation."
-    echo -e "Enjoy using ERPNext!"
-    echo -e "--------------------------------------------------------------------------------${NC}"
+
+    # Grant frappe user sudo privileges if not already granted
+    if sudo grep -q "^frappe ALL=(ALL) NOPASSWD:ALL" /etc/sudoers.d/frappe 2>/dev/null; then
+        echo -e "${GREEN}'frappe' user already has sudo privileges.${NC}"
+    else
+        echo -e "${YELLOW}Granting 'frappe' user sudo privileges...${NC}"
+        echo "frappe ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/frappe
+        sudo chmod 0440 /etc/sudoers.d/frappe
+        echo -e "${GREEN}'frappe' user granted sudo privileges.${NC}"
+    fi
+}
+
+# Function to switch to frappe user and run Bench commands
+run_as_frappe() {
+    sudo -u frappe bash -c "
+        # Navigate to home directory
+        cd \$HOME
+
+        # Clone the installer repository if it doesn't exist
+        if [ -d 'Frappe-V15---ERP-Next-Quick-Install' ]; then
+            echo 'Repository already cloned.'
+        else
+            echo 'Cloning the installer repository...'
+            git clone https://github.com/kamikazce/Frappe-V15---ERP-Next-Quick-Install.git
+            echo 'Repository cloned successfully.'
+        fi
+
+        # Navigate to the installer directory
+        cd Frappe-V15---ERP-Next-Quick-Install
+
+        # Make the installer script executable
+        chmod +x install_frappe.sh
+
+        # Run the installer script
+        ./install_frappe.sh
+    "
 }
 
 # Main Installation Flow
 
-echo -e "${LIGHT_BLUE}Starting Frappe V15 & ERPNext Installation...${NC}"
+echo -e "${YELLOW}Now setting up your environment...${NC}"
+sleep 2
+
+# Create frappe user
+create_frappe_user
+
+# Install essential packages and dependencies
+echo -e "${YELLOW}Installing essential packages and dependencies...${NC}"
+sleep 2
+sudo apt update && sudo apt upgrade -y
+
+sudo apt install -y software-properties-common git curl wget gnupg build-essential zlib1g-dev libncurses5-dev libgdbm-dev \
+    libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev python3-dev python3-venv python3-pip \
+    redis-server mariadb-server mariadb-client snapd fontconfig libxrender1 xfonts-75dpi xfonts-base
+
+# Install wkhtmltopdf
+echo -e "${YELLOW}Installing wkhtmltopdf...${NC}"
+sleep 2
+arch=$(uname -m)
+case $arch in
+    x86_64) arch="amd64" ;;
+    aarch64) arch="arm64" ;;
+    *) echo -e "${RED}Unsupported architecture: $arch${NC}"; exit 1 ;;
+esac
+
+wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_$arch.deb
+sudo dpkg -i wkhtmltox_0.12.6.1-2.jammy_$arch.deb || true
+sudo cp /usr/local/bin/wkhtmlto* /usr/bin/
+sudo chmod a+x /usr/bin/wk*
+sudo rm wkhtmltox_0.12.6.1-2.jammy_$arch.deb
+sudo apt --fix-broken install -y
+sudo apt install -y fontconfig xvfb libfontconfig xfonts-base xfonts-75dpi libxrender1
+echo -e "${GREEN}wkhtmltopdf installed successfully.${NC}"
 sleep 2
 
 # Uninstall existing MariaDB if necessary
@@ -477,7 +565,7 @@ configure_mariadb
 # Install Python 3.10 if necessary
 install_python
 
-# Install Node.js, npm, and yarn
+# Install NVM, Node.js, npm, and yarn
 install_node_npm_yarn
 
 # Install Bench CLI
@@ -501,5 +589,17 @@ install_ssl
 # Apply final permissions
 apply_permissions
 
-# Display completion message
-completion_message
+# Completion message
+echo -e "${GREEN}--------------------------------------------------------------------------------"
+if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
+    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
+    echo -e "You can access your ERPNext instance securely at https://$site_name"
+else
+    server_ip=$(hostname -I | awk '{print $1}')
+    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
+    echo -e "You can access your ERPNext instance at http://$server_ip"
+fi
+echo -e "Visit https://docs.erpnext.com for documentation."
+echo -e "Enjoy using ERPNext!"
+echo -e "--------------------------------------------------------------------------------${NC}"
+
