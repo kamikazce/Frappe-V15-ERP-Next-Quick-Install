@@ -1,45 +1,27 @@
-Setting Up WSL
-If you haven't set up WSL yet, follow these steps:
+# Update system packages
+sudo apt update && sudo apt upgrade -y
 
-Enable WSL:
+# Install essential dependencies
+sudo apt install -y software-properties-common git curl wget gnupg build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev python3-dev python3-venv python3-pip redis-server mariadb-server mariadb-client snapd
 
-bash
-Copy code
-wsl --install
-This command installs the latest WSL version along with the default Ubuntu distribution.
+# Create a dedicated frappe user
+sudo adduser frappe
 
-Update WSL (if already installed):
+# Grant frappe user sudo privileges
+sudo usermod -aG sudo frappe
 
-bash
-Copy code
-wsl --update
-Launch Ubuntu: Open the Ubuntu application from the Start menu and complete the initial setup.
+# Switch to frappe user
+su - frappe
 
-Installation
-Follow the steps below to install Frappe V15 and ERPNext using the provided installer script.
-
-Step 1: Clone the Repository
-First, clone the repository to your local machine using git:
-
-bash
-Copy code
+# Clone the installer repository
 git clone https://github.com/kamikazce/Frappe-V15---ERP-Next-Quick-Install.git
-Step 2: Navigate to the Directory
-Change your current directory to the cloned repository:
 
-bash
-Copy code
+# Navigate to the installer directory
 cd Frappe-V15---ERP-Next-Quick-Install
-Step 3: Make the Installer Executable
-Modify the permissions of the installer script to make it executable:
 
-bash
-Copy code
+# Make the installer script executable
 chmod +x install_frappe.sh
-Step 4: Run the Installer
-Execute the installer script with sudo privileges:
 
-bash
-Copy code
+# Run the installer script
 ./install_frappe.sh
-Note: The script will prompt you for various inputs, such as MariaDB root password, site name, administrator password, and options to install ERPNext and SSL.
+
