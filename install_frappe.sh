@@ -112,29 +112,29 @@ uninstall_mariadb() {
     fi
 }
 
-# Function to install MariaDB 10.6
+# Function to install MariaDB 10.6 using mariadb_repo_setup for jammy
 install_mariadb() {
     echo -e "${YELLOW}Installing MariaDB 10.6...${NC}"
-    
+
+    # Remove any existing MariaDB repository lists to prevent conflicts
+    sudo rm -f /etc/apt/sources.list.d/mariadb.list
+
+    # Download mariadb_repo_setup script
+    wget https://downloads.mariadb.com/MariaDB/mariadb_repo_setup -O mariadb_repo_setup
+    chmod +x mariadb_repo_setup
+
     # Determine Ubuntu codename
     ubuntu_codename=$(lsb_release -cs)
-    
-    # Install software-properties-common and dirmngr
-    sudo apt install -y software-properties-common dirmngr
-    
-    # Import MariaDB GPG key
-    sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc | sudo gpg --dearmor -o /etc/apt/keyrings/mariadb-keyring.gpg
-    
-    # Add MariaDB repository
-    echo "deb [arch=amd64,arm64,ppc64el signed-by=/etc/apt/keyrings/mariadb-keyring.gpg] https://mariadb.org/mariadb/repositories/10.6/ubuntu ${ubuntu_codename} main" | sudo tee /etc/apt/sources.list.d/mariadb.list
-    
+
+    # Run mariadb_repo_setup with os-version=jammy
+    sudo bash mariadb_repo_setup --os-type=ubuntu --os-version=jammy --mariadb-server-version=10.6
+
     # Update package lists
     sudo apt update
-    
+
     # Install MariaDB 10.6
     sudo apt install -y mariadb-server mariadb-client
-    
+
     # Verify MariaDB version
     installed_mariadb_version=$(mariadb --version | awk '{print $5}' | cut -d',' -f1)
     if [[ "$installed_mariadb_version" != "10.6."* ]]; then
@@ -143,6 +143,9 @@ install_mariadb() {
     fi
     echo -e "${GREEN}MariaDB 10.6 installed successfully.${NC}"
     sleep 2
+
+    # Clean up
+    rm mariadb_repo_setup
 }
 
 # Function to configure MariaDB
@@ -490,35 +493,25 @@ create_frappe_user() {
     fi
 }
 
-# Function to switch to frappe user and run Bench commands
-run_as_frappe() {
-    sudo -u frappe bash -c "
-        # Navigate to home directory
-        cd \$HOME
-
-        # Clone the installer repository if it doesn't exist
-        if [ -d 'Frappe-V15---ERP-Next-Quick-Install' ]; then
-            echo 'Repository already cloned.'
-        else
-            echo 'Cloning the installer repository...'
-            git clone https://github.com/kamikazce/Frappe-V15---ERP-Next-Quick-Install.git
-            echo 'Repository cloned successfully.'
-        fi
-
-        # Navigate to the installer directory
-        cd Frappe-V15---ERP-Next-Quick-Install
-
-        # Make the installer script executable
-        chmod +x install_frappe.sh
-
-        # Run the installer script
-        ./install_frappe.sh
-    "
+# Function to display completion message
+completion_message() {
+    echo -e "${GREEN}--------------------------------------------------------------------------------"
+    if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
+        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
+        echo -e "You can access your ERPNext instance securely at https://$site_name"
+    else
+        server_ip=$(hostname -I | awk '{print $1}')
+        echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
+        echo -e "You can access your ERPNext instance at http://$server_ip"
+    fi
+    echo -e "Visit https://docs.erpnext.com for documentation."
+    echo -e "Enjoy using ERPNext!"
+    echo -e "--------------------------------------------------------------------------------${NC}"
 }
 
 # Main Installation Flow
 
-echo -e "${YELLOW}Now setting up your environment...${NC}"
+echo -e "${LIGHT_BLUE}Starting Frappe V15 & ERPNext Installation...${NC}"
 sleep 2
 
 # Create frappe user
@@ -590,16 +583,6 @@ install_ssl
 apply_permissions
 
 # Completion message
-echo -e "${GREEN}--------------------------------------------------------------------------------"
-if [[ "$install_ssl" == "yes" || "$install_ssl" == "y" ]]; then
-    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15 with SSL."
-    echo -e "You can access your ERPNext instance securely at https://$site_name"
-else
-    server_ip=$(hostname -I | awk '{print $1}')
-    echo -e "Congratulations! You have successfully installed Frappe and ERPNext version 15."
-    echo -e "You can access your ERPNext instance at http://$server_ip"
-fi
-echo -e "Visit https://docs.erpnext.com for documentation."
-echo -e "Enjoy using ERPNext!"
-echo -e "--------------------------------------------------------------------------------${NC}"
+completion_message
+
 
